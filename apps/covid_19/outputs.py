@@ -20,7 +20,7 @@ def find_incidence_outputs(parameters):
             "origin": last_presympt,
             "to": first_infectious,
             "origin_condition": "",
-            "to_condition": "",
+            "to_condition": ""
         }
     }
 
@@ -124,6 +124,7 @@ def calculate_incidence_icu_covid(model, time):
         if "incidenceX" in key and "icu" in key:
             incidence_icu += value[this_time_index]
     return incidence_icu
+
 
 def find_date_from_year_start(times, incidence):
     """

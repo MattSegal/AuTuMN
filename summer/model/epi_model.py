@@ -695,12 +695,17 @@ class EpiModel:
                 )
                 or output_conn["to_condition"] == ""
             )
+            check_flow_type = \
+                "type" not in output_conn or \
+                output_conn["type"] == "" or \
+                self.transition_flows_dict["type"][idx] == output_conn["type"]
             return (
                 check_implement
                 and check_origin_stem
                 and check_target_stem
                 and check_origin_condition
                 and check_target_condition
+                and check_flow_type
             )
 
         return [i for i in range(len(self.transition_flows)) if condition(i)]
