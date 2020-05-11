@@ -1,11 +1,8 @@
 import os
-from summer.model import StratifiedModel
+from typing import Dict, List
 
-from autumn.tool_kit.utils import normalise_sequence, convert_list_contents_to_int
 from autumn import constants
 from autumn.constants import Compartment
-from autumn.tb_model import list_all_strata_for_mortality
-from autumn.tool_kit.scenarios import get_model_times_from_inputs
 from autumn.disease_categories.emerging_infections.flows import (
     add_infection_flows,
     add_transition_flows,
@@ -18,10 +15,17 @@ from autumn.demography.social_mixing import (
     update_mixing_with_multipliers,
     get_total_contact_rates_by_age,
 )
-from autumn.demography.population import get_population_size
+from summer.model import StratifiedModel
 from autumn.db import Database
+from autumn.demography.ageing import add_agegroup_breaks
+from autumn.demography.population import get_population_size
 from autumn.summer_related.parameter_adjustments import split_multiple_parameters
+from autumn.tb_model import list_all_strata_for_mortality
+from autumn.tool_kit import schema_builder as sb
+from autumn.tool_kit.scenarios import get_model_times_from_inputs
+from autumn.tool_kit.utils import find_relative_date_from_string_or_tuple, normalise_sequence, convert_list_contents_to_int
 
+from . import preprocess
 from .stratification import stratify_by_clinical
 from .outputs import (
     find_incidence_outputs,
@@ -32,25 +36,111 @@ from .outputs import (
 )
 from .importation import set_tv_importation_rate
 from .matrices import build_covid_matrices, apply_npi_effectiveness
-from .preprocess import preprocess_params
 
 # Database locations
-FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_DB_PATH = os.path.join(constants.DATA_PATH, "inputs.db")
-
 input_database = Database(database_name=INPUT_DB_PATH)
 
+validate_params = sb.build_validator(
+    # Country info
+    country=str,
+    iso3=str,
+    # Running time.
+    times={
+        'start_time': float,
+        'end_time': float,
+        'time_step': float,
+    },
+    # Compartment construction
+    n_compartment_repeats=Dict[str, int],
+    compartment_periods=Dict[str, float],
+    prop_exposed_presympt=float,
+    prop_infectious_early=float,
+    # Strata stuff
+    stratify_by=List[str],
+    clinical_strata=List[str],
+    agegroup_breaks=List[int],
+    # Age stratified params
+    symptomatic_props=List[float],
+    hospital_props=List[float],
+    hospital_inflate=bool,
+    icu_prop=float,
+    infection_fatality_props=List[float],
+    young_reduced_susceptibility=float,
+    reduced_susceptibility_agegroups=List[str],  # Why a string?
+    # Mixing matrix
+    mixing=Dict[str, {
+        'times': list, # date or float
+        'values': List[float]
+    }],
+    # Other stuff
+    implement_importation=bool,
+    contact_rate=float,
+    non_sympt_infect_multiplier=float,
+    hospital_non_icu_infect_multiplier=float,
+    icu_infect_multiplier=float,
+    prop_isolated_among_symptomatic=float,
+    self_isolation_effect=float,
+    enforced_isolation_effect=float,
+    infectious_seed=int,
+    ifr_multipliers=List[float],  # FIXME: Not always used
+    young_reduced_susceptibility=float,
+    prop_isolated_among_symptomatic=float,
+    npi_effectiveness=Dict[str,float],
+    data=Dict[str, List[float]],
+    # Death rates.
+    infect_death=float,
+    universal_death_rate=float,
+)
 
-def build_model(country: str, params: dict, update_params={}):
-    """
-    Build the master function to run the TB model for Covid-19
 
-    :param update_params: dict
-        Any parameters that need to be updated for the current run
-    :return: StratifiedModel
-        The final model with all parameters and stratifications
+def build_model(params: dict) -> StratifiedModel:
     """
-    model_parameters = preprocess_params(params, update_params)
+    Build the master function to run the TB model for Covid-19.
+    Returns the final model with all parameters and stratifications.
+    """
+    validate_params(params)
+    country = params['country']
+
+ 
+    default = params["default"]
+
+    # Adjust infection for relative all-cause mortality compared to China, if process being applied
+    if "ifr_multiplier" in default:
+        default["infection_fatality_props"] = [
+            i_prop * default["ifr_multiplier"] for i_prop in default["infection_fatality_props"]
+        ]
+        if default["hospital_inflate"]:
+            default["hospital_props"] = [
+                i_prop * default["ifr_multiplier"] for i_prop in default["hospital_props"]
+            ]
+
+    # Calculate presymptomatic period from exposed period and relative proportion of that period spent infectious
+    if "prop_exposed_presympt" in default:
+        default["compartment_periods"][Compartment.EXPOSED] = default["compartment_periods"][
+            "incubation"
+        ] * (1.0 - default["prop_exposed_presympt"])
+        default["compartment_periods"][Compartment.PRESYMPTOMATIC] = (
+            default["compartment_periods"]["incubation"] * default["prop_exposed_presympt"]
+        )
+
+    # Calculate early infectious period from total infectious period and proportion of that period spent isolated
+    if "prop_infectious_early" in default:
+        default["compartment_periods"][Compartment.EARLY_INFECTIOUS] = (
+            default["compartment_periods"]["total_infectious"] * default["prop_infectious_early"]
+        )
+        default["compartment_periods"][Compartment.LATE_INFECTIOUS] = default[
+            "compartment_periods"
+        ]["total_infectious"] * (1.0 - default["prop_infectious_early"])
+    # =============== END FIXME
+
+
+    params = add_agegroup_breaks(params)
+
+    # Update parameters stored in dictionaries that need to be modified during calibration
+    params = update_dict_params_for_calibration(params)
+
+    model_parameters = params
 
     # Get population size (by age if age-stratified)
     total_pops, model_parameters = get_population_size(model_parameters, input_database)
@@ -110,18 +200,15 @@ def build_model(country: str, params: dict, update_params={}):
     total_infectious_times = sum(
         [model_parameters["compartment_periods"][comp] for comp in is_infectious]
     )
-    init_pop = \
-        {comp: model_parameters["infectious_seed"] *
-               model_parameters["compartment_periods"][comp] /
-               total_infectious_times for
-         comp in is_infectious}
+    init_pop = {
+        comp: model_parameters["infectious_seed"]
+        * model_parameters["compartment_periods"][comp]
+        / total_infectious_times
+        for comp in is_infectious
+    }
 
-    # Set integration times
-    integration_times = get_model_times_from_inputs(
-        round(model_parameters["start_time"]),
-        model_parameters["end_time"],
-        model_parameters["time_step"],
-    )
+    # Set integration times 
+    integration_times = get_model_times_from_inputs(**params['times'])
 
     # Add flows through replicated compartments
     flows = []
@@ -291,3 +378,65 @@ def build_model(country: str, params: dict, update_params={}):
         _covid_model.dynamic_mixing_matrix = True
 
     return _covid_model
+
+
+
+
+def update_dict_params_for_calibration(params):
+    """
+    Update some specific parameters that are stored in a dictionary but are updated during calibration.
+    For example, we may want to update params['default']['compartment_periods']['incubation'] using the parameter
+    ['default']['compartment_periods_incubation']
+    :param params: dict
+        contains the model parameters
+    :return: the updated dictionary
+    """
+
+    if "n_imported_cases_final" in params:
+        params["data"]["n_imported_cases"][-1] = params["n_imported_cases_final"]
+
+    for location in ["school", "work", "home", "other_locations"]:
+        if "npi_effectiveness_" + location in params:
+            params["npi_effectiveness"][location] = params["npi_effectiveness_" + location]
+
+    for comp_type in [
+        "incubation",
+        "infectious",
+        "late",
+        "hospital_early",
+        "hospital_late",
+        "icu_early",
+        "icu_late",
+    ]:
+        if "compartment_periods_" + comp_type in params:
+            params["compartment_periods"][comp_type] = params["compartment_periods_" + comp_type]
+
+    return params
+
+
+def get_mixing_lists_from_dict(working_dict):
+    return [i_key for i_key in working_dict.keys()], [i_key for i_key in working_dict.values()]
+
+
+def revise_mixing_data_for_dicts(parameters):
+    list_of_possible_keys = ["home", "other_locations", "school", "work"]
+    for age_index in range(16):
+        list_of_possible_keys.append("age_" + str(age_index))
+    for mixing_key in list_of_possible_keys:
+        if mixing_key in parameters:
+            (
+                parameters[mixing_key + "_times"],
+                parameters[mixing_key + "_values"],
+            ) = get_mixing_lists_from_dict(parameters[mixing_key])
+    return parameters
+
+
+def revise_dates_if_ymd(mixing_params):
+    """
+    Find any mixing times parameters that were submitted as a three element list of year, month day - and revise to an
+    integer representing the number of days from the reference time.
+    """
+    for key in (k for k in mixing_params if k.endswith("_times")):
+        for i_time, time in enumerate(mixing_params[key]):
+            if isinstance(time, (list, str)):
+                mixing_params[key][i_time] = find_relative_date_from_string_or_tuple(time)

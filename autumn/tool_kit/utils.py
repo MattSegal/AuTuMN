@@ -253,22 +253,6 @@ def find_first_index_reaching_cumulative_sum(a_list, threshold):
     return next(i for i, val in enumerate(cumsum_list) if val >= threshold)
 
 
-def get_date_from_tuple(date_as_tuple):
-    return date(date_as_tuple[0], date_as_tuple[1], date_as_tuple[2])
-
-
-def get_date_from_string(date_as_string):
-    return date(int(date_as_string[:4]), int(date_as_string[4: 6]), int(date_as_string[6:]))
-
-
-def find_relative_date_from_string_or_tuple(requested_date, base_date=(2019, 12, 31)):
-    requested_date = get_date_from_string(requested_date) if \
-        type(requested_date) == str else \
-        get_date_from_tuple(requested_date)
-    difference = requested_date - get_date_from_tuple(base_date)
-    return difference.days
-
-
 def normalise_sequence(input_sequence):
     """
     Normalise a list or tuple to produce a tuple with values representing the proportion of each to the total of the
@@ -288,7 +272,7 @@ def element_wise_list_division(numerator, denominator):
     return [num / den for num, den in zip(numerator, denominator)]
 
 
-def find_distribution_params_from_mean_and_ci(distribution, mean, ci, ci_width=.95):
+def find_distribution_params_from_mean_and_ci(distribution, mean, ci, ci_width=0.95):
     """
     Work out the parameters of a given distribution based on a desired mean and CI
     :param distribution: string
@@ -302,38 +286,38 @@ def find_distribution_params_from_mean_and_ci(distribution, mean, ci, ci_width=.
     :return:
         a dictionary with the parameters
     """
-    assert len(ci) == 2 and ci[1] > ci[0] and 0. < ci_width < 1.
-    percentile_low = (1. - ci_width) / 2.
-    percentile_up = 1. - percentile_low
+    assert len(ci) == 2 and ci[1] > ci[0] and 0.0 < ci_width < 1.0
+    percentile_low = (1.0 - ci_width) / 2.0
+    percentile_up = 1.0 - percentile_low
 
-    if distribution == 'beta':
-        assert 0. < ci[0] < 1. and 0. < ci[1] < 1. and 0. < mean < 1.
+    if distribution == "beta":
+        assert 0.0 < ci[0] < 1.0 and 0.0 < ci[1] < 1.0 and 0.0 < mean < 1.0
 
         def distance_to_minimise(a):
-            b = a * (1. - mean) / mean
+            b = a * (1.0 - mean) / mean
             vals = beta.ppf([percentile_low, percentile_up], a, b)
-            dist = sum([(ci[i] - vals[i])**2 for i in range(2)])
+            dist = sum([(ci[i] - vals[i]) ** 2 for i in range(2)])
             return dist
 
-        sol = minimize(distance_to_minimise, [1.], bounds=[(0., None)])
+        sol = minimize(distance_to_minimise, [1.0], bounds=[(0.0, None)])
         best_a = sol.x
-        best_b = best_a * (1. - mean) / mean
-        params = {'a': best_a, 'b': best_b}
+        best_b = best_a * (1.0 - mean) / mean
+        params = {"a": best_a, "b": best_b}
 
-    elif distribution == 'gamma':
-        assert ci[0] > 0 and ci[1] > 0 and mean > 0.
+    elif distribution == "gamma":
+        assert ci[0] > 0 and ci[1] > 0 and mean > 0.0
 
         def distance_to_minimise(scale):
             shape = mean / scale
             vals = gamma.ppf([percentile_low, percentile_up], shape, 0, scale)
-            dist = sum([(ci[i] - vals[i])**2 for i in range(2)])
+            dist = sum([(ci[i] - vals[i]) ** 2 for i in range(2)])
             return dist
 
-        sol = minimize(distance_to_minimise, [1.], bounds=[(1.e-11, None)])
+        sol = minimize(distance_to_minimise, [1.0], bounds=[(1.0e-11, None)])
         best_scale = sol.x
         best_shape = mean / best_scale
 
-        params = {'shape': best_shape, 'scale': best_scale}
+        params = {"shape": best_shape, "scale": best_scale}
     else:
         raise ValueError(distribution + " distribution is not supported for the moment")
 

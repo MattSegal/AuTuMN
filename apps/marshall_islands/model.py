@@ -42,14 +42,11 @@ FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_DB_PATH = os.path.join(constants.DATA_PATH, "inputs.db")
 
 
-def build_model(params: dict, update_params={}):
+def build_model(params: dict) -> StratifiedModel:
     """
     Build the master function to run the TB model for the Republic of the Marshall Islands
 
-    :param update_params: dict
-        Any parameters that need to be updated for the current run
-    :return: StratifiedModel
-        The final model with all parameters and stratifications
+    Returns the final model with all parameters and stratifications
     """
     input_database = Database(database_name=INPUT_DB_PATH)
 
@@ -66,7 +63,6 @@ def build_model(params: dict, update_params={}):
     init_pop = {Compartment.EARLY_INFECTIOUS: 10, Compartment.LATE_LATENT: 100}
 
     model_parameters = params
-    model_parameters.update(update_params)
 
     # Update partial immunity/susceptibility parameters
     model_parameters = update_transmission_parameters(
