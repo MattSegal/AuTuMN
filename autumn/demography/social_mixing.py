@@ -27,18 +27,6 @@ def load_specific_prem_sheet(mixing_location, country):
     return np.array(pd.read_excel(file_dir, sheet_name=country.title(), header=header_argument))
 
 
-def load_all_prem_types(country):
-    """
-    Collate the matrices of different location types for a given country
-
-    :param country: str
-        Name of the requested country
-    """
-    matrices = {}
-    for sheet_type in ("all_locations", "home", "other_locations", "school", "work"):
-        matrices[sheet_type] = load_specific_prem_sheet(sheet_type, country)
-    return matrices
-
 
 def load_age_calibration():
     """
@@ -63,18 +51,6 @@ def load_age_calibration():
     return pd.Series(y, index=age_breakpoints)
 
 
-def update_mixing_with_multipliers(mixing_matrix, multipliers):
-    """
-    Updates the mixing matrix using some age-specific multipliers
-    :param mixing_matrix: the baseline mixing-matrix
-    :param multipliers: a matrix with the ages-specific multipliers
-    :return: the updated mixing-matrix
-    """
-    assert mixing_matrix.shape == multipliers.shape
-
-    return np.multiply(mixing_matrix, multipliers)
-
-
 def apply_age_specific_contact_multipliers(mixing_matrix, age_specific_multipliers):
     """
     Update a mixing matrix using age-specific multipliers specified through a dictionary
@@ -85,7 +61,7 @@ def apply_age_specific_contact_multipliers(mixing_matrix, age_specific_multiplie
     """
     mixing_multipliers_matrix = np.ones((16, 16))
     for age_index, multiplier in age_specific_multipliers.items():
-        assert(0 <= age_index <= 15)
+        assert 0 <= age_index <= 15
         mixing_multipliers_matrix[age_index, :] *= multiplier
         mixing_multipliers_matrix[:, age_index] *= multiplier
     return update_mixing_with_multipliers(mixing_matrix, mixing_multipliers_matrix)
@@ -107,7 +83,7 @@ def get_all_prem_countries():
     return sheet_names
 
 
-def get_total_contact_rates_by_age(mixing_matrix, direction='horizontal'):
+def get_total_contact_rates_by_age(mixing_matrix, direction="horizontal"):
     """
     Sum the contact-rates by age group
     :param mixing_matrix: the input mixing matrix
@@ -115,10 +91,13 @@ def get_total_contact_rates_by_age(mixing_matrix, direction='horizontal'):
     :return: dict
         keys are the age categories and values are the aggregated contact rates
     """
-    assert direction in ['horizontal', 'vertical'], "direction should be in ['horizontal', 'vertical']"
+    assert direction in [
+        "horizontal",
+        "vertical",
+    ], "direction should be in ['horizontal', 'vertical']"
     aggregated_contact_rates = {}
     for i in range(16):
-        if direction == 'horizontal':
+        if direction == "horizontal":
             aggregated_contact_rates[str(5 * i)] = mixing_matrix[i, :].sum()
         else:
             aggregated_contact_rates[str(5 * i)] = mixing_matrix[:, i].sum()
