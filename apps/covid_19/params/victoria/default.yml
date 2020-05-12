@@ -2,7 +2,12 @@
 country: victoria
 iso3: VIC
 
-implement_importation: True
+importation:
+  active: True
+  times: [70., 71., 86., 100., 107]
+  cases: [1, 1, 45, 4, 1.1341]
+  self_isolation_effect: .434371
+  enforced_isolation_effect: .9858
 
 infectious_seed: 0
 
@@ -16,9 +21,6 @@ young_reduced_susceptibility: .4484674
 prop_isolated_among_symptomatic: .8035
 npi_effectiveness:
   other_locations: .9697829
-
-self_isolation_effect: .434371
-enforced_isolation_effect: .9858
 
 mixing:
   other_locations:
@@ -102,9 +104,5 @@ mixing:
     values:
       - 1.
       - 0.
-
-data:
-  times_imported_cases: [70., 71., 86., 100., 107]
-  n_imported_cases: [1, 1, 45, 4, 1.1341]
 
 scenario_start_time: 130

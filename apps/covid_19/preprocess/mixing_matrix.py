@@ -12,9 +12,10 @@ BASE_DATE = date(2010, 12, 31)
 
 # Locations that can be used for mixing
 LOCATIONS = ["home", "other_locations", "school", "work"]
+AGE_INDICES = list(range(16))
 
 
-def build_static_mixing_matrix(country: str, multipliers: np.ndarray) -> np.ndarray:
+def build_static(country: str, multipliers: np.ndarray) -> np.ndarray:
     """
     Get a non-time-varying mixing matrix.
     multipliers is a matrix with the ages-specific multipliers.
@@ -29,7 +30,7 @@ def build_static_mixing_matrix(country: str, multipliers: np.ndarray) -> np.ndar
         return mixing_matrix
 
 
-def build_dynamic_mixing_matrix(
+def build_dynamic(
     country: str, mixing_params: dict, npi_effectiveness_params: dict
 ) -> Callable[float, dict]:
     """
@@ -54,49 +55,38 @@ def build_dynamic_mixing_matrix(
 
     # Load all location-specific mixing info.
     matrix_components = {}
-    for sheet_type in ["all_locations", "home", "other_locations", "school", "work"]:
+    for sheet_type in ["all_locations"] + LOCATIONS:
         matrix_components[sheet_type] = load_specific_prem_sheet(sheet_type, country)
 
     def mixing_matrix_function(time: float):
         mixing_matrix = matrix_components["all_locations"]
+
         # Make adjustments by location
-        for location in [
-            loc
-            for loc in ["home", "other_locations", "school", "work"]
-            if loc + "_times" in mixing_params
-        ]:
-            location_adjustment = scale_up_function(
-                mixing_params[location + "_times"], mixing_params[location + "_values"], method=4
-            )
-            mixing_matrix = np.add(
-                mixing_matrix, (location_adjustment(time) - 1.0) * matrix_components[location],
-            )
+        for loc_key in LOCATIONS:
+            loc_times = mixing[loc_key]["times"]
+            loc_vals = mixing[loc_key]["values"]
+            loc_adj_func = scale_up_function(loc_times, loc_vals, method=4)
+            location_adjustment_matrix = (loc_adj_func(time) - 1.0) * matrix_components[location]
+            mixing_matrix = np.add(mixing_matrix, location_adjustment_matrix)
 
         # Make adjustments by age
-        affected_age_indices = [
-            age_index
-            for age_index in range(16)
-            if "age_" + str(age_index) + "_times" in mixing_params
-        ]
-        complement_indices = [
-            age_index for age_index in range(16) if age_index not in affected_age_indices
-        ]
+        affected_age_indices = [i for i in AGE_INDICES if f"age_{i}" in mixing]
+        complement_indices = [i for i in AGE_INDICES if i not in affected_age_indices]
 
-        for age_index_affected in affected_age_indices:
-            age_adjustment = scale_up_function(
-                mixing_params["age_" + str(age_index_affected) + "_times"],
-                mixing_params["age_" + str(age_index_affected) + "_values"],
-                method=4,
-            )
-            for age_index_not_affected in complement_indices:
-                mixing_matrix[age_index_affected, age_index_not_affected] *= age_adjustment(time)
-                mixing_matrix[age_index_not_affected, age_index_affected] *= age_adjustment(time)
+        for age_idx_affected in affected_age_indices:
+            age_idx_key = f"age_{age_idx_affected}"
+            age_times = mixing[age_idx_key]["times"]
+            age_vals = mixing[age_idx_key]["values"]
+            age_adj_func = scale_up_function(loc_times, loc_vals, method=4,)
+            age_adj_val = age_adj_func(time)
+            for age_idx_not_affected in complement_indices:
+                mixing_matrix[age_idx_affected, age_idx_not_affected] *= age_adj_val
+                mixing_matrix[age_idx_not_affected, age_idx_affected] *= age_adj_val
 
             # FIXME: patch for elderly cocooning in Victoria assuming
-            for age_index_affected_bis in affected_age_indices:
-                mixing_matrix[age_index_affected, age_index_affected_bis] *= (
-                    1.0 - (1.0 - age_adjustment(time)) / 2.0
-                )
+            # FIXME: ... assuming what?
+            for idx in affected_age_indices:
+                mixing_matrix[age_idx_affected, idx] *= 1.0 - (1.0 - age_adj_val) / 2.0
 
         return mixing_matrix
 

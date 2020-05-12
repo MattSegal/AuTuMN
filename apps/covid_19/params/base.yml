@@ -13,53 +13,34 @@ times:
 # Parameters used to build a general model of COVID-19 disease for application to Australia or internationally
 # MODEL STRUCTURE PARAMETERS
 
-# Number of times each compartment representing active infection (i.e. not S and not R) are repeated
-# Now redundant, because we have repeated the compartments so many times
-n_compartment_repeats:
-  susceptible: 1
-  exposed: 1
-  presympt: 1
-  infectious: 1
-  late: 1
-  recovered: 1
+importation:
+  active: False
+  times: []
+  cases: []
+  # parameters to define the effect (infectiousness adjustment) of self-isolation and enforced isolation
+  self_isolation_effect: .67
+  enforced_isolation_effect: 1.
 
-implement_importation: False
-import_secondary_rate: 0.
-
+# Mean time (?) spent in each compartment
 compartment_periods:
-  incubation: 5.
-  # exposed now calculated
-  # presympt now calculated
-  total_infectious: 7.
-  # infectious now refers to total infectious period, which is confusing because there is an infectious compartment
-  # late now calculated
   hospital_early: 5.
   hospital_late: 8.
   icu_early: 5.
   icu_late: 10.
 
-# Proportion of the exposed period spent infectious - i.e. "presymptomatic", assumed
-prop_exposed_presympt: 0.5
+# Mean time (?) spent in each compartment, defined via proprotions
+compartment_periods_calculated:
+  total_infectious:
+    total_period: 7.
+    proportions:
+      infectious: 0.333
+      late: 0.667
 
-# Proportion of the infectious period spent in the early compartment (i.e. can't be isolated for symptoms), assumed
-prop_infectious_early: 0.333
-
-# Stratification-related requests
-stratify_by:
-  - agegroup
-  - clinical
-
-# Currently must use only four strata, because deaths will not be calculated correctly otherwise - should be quickly
-# adaptable to fewer strata as needed, though
-clinical_strata:
-  - non_sympt
-  - sympt_non_hospital
-  - sympt_isolate
-  - hospital_non_icu
-  - icu
-agegroup_breaks:
-  - 80
-  - 5
+  incubation:
+    total_period: 5.
+    proportions:
+      exposed: 0.5
+      presympt: 0.5
 
 # AGE-STRATIFIED PARAMETERS
 
@@ -105,11 +86,7 @@ infection_fatality_props:
 
 # Reduced susceptibility in children - assumed, but informed by Iceland NEJM paper
 young_reduced_susceptibility: 0.5
-reduced_susceptibility_agegroups:
-  - "0"
-  - "5"
-  - "10"
-  - "15"
+reduced_susceptibility_agegroups: [0, 5, 10, 15]
 
 # NON-AGE-STRATIFIED PARAMETERS
 
@@ -120,10 +97,6 @@ icu_infect_multiplier: 0.2
 
 # proportion of isolated cases among symptomatic
 prop_isolated_among_symptomatic: 0.6
-
-# parameters to define the effect (infectiousness adjustment) of self-isolation and enforced isolation
-self_isolation_effect: .67
-enforced_isolation_effect: 1.
 
 # Country to extract Prem mixing matrix from
 country: null

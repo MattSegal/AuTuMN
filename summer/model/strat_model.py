@@ -232,7 +232,7 @@ class StratifiedModel(EpiModel):
         infectiousness_adjustments={},
         mixing_matrix=None,
         target_props=None,
-        verbose=True,
+        verbose=False,
     ):
         """
         calls to initial preparation, checks and methods that stratify the various aspects of the model
@@ -1683,8 +1683,10 @@ class StratifiedModel(EpiModel):
         # Not sure which of these to use
         if type(_compartment_values) == list:
             _compartment_values = numpy.asarray(_compartment_values)
-        self.infectious_denominators = \
-            [sum(_compartment_values[self.mixing_indices[category]]) for category in self.mixing_indices]
+        self.infectious_denominators = [
+            sum(_compartment_values[self.mixing_indices[category]])
+            for category in self.mixing_indices
+        ]
 
     def find_infectious_multiplier(self, n_flow):
         """
@@ -1706,18 +1708,18 @@ class StratifiedModel(EpiModel):
         mixing_elements = (
             [1.0] if self.mixing_matrix is None else self.mixing_matrix[force_index, :]
         )
-        denominator = [1.0] * len(self.infectious_denominators) if "_density" in flow_type else \
-            self.infectious_denominators
+        denominator = (
+            [1.0] * len(self.infectious_denominators)
+            if "_density" in flow_type
+            else self.infectious_denominators
+        )
 
-        return \
-            sum(element_list_division(
-                element_list_multiplication(
-                    self.infectious_populations[strain],
-                    mixing_elements
-                ),
-                denominator
+        return sum(
+            element_list_division(
+                element_list_multiplication(self.infectious_populations[strain], mixing_elements),
+                denominator,
             )
-            )
+        )
 
     def prepare_time_step(self, _time):
         """

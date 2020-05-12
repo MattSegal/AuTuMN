@@ -41,11 +41,10 @@ def load_covid_params(app_name: str):
         if fname.startswith("scenario-") and fname.endswith(".yml")
     ]
     for fname in scenaro_params_fnames:
-        scenario_idx = int(fname.split('-')[-1].split('.')[0])
+        scenario_idx = int(fname.split("-")[-1].split(".")[0])
         yaml_path = path.join(app_param_dir, fname)
         with open(yaml_path, "r") as f:
-            scenarios[scenario_idx]o_params = yaml.safe_load(f)
-        
+            scenarios[scenario_idx] = yaml.safe_load(f)
 
     # By convention this is outside of the default params
     scenario_start_time = None
