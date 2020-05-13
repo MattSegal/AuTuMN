@@ -1,4 +1,5 @@
 import os
+import itertools
 
 from autumn import constants
 from autumn.constants import Compartment
@@ -10,7 +11,20 @@ from autumn.tool_kit import get_model_times_from_inputs, schema_builder as sb
 from autumn.tool_kit.utils import normalise_sequence
 
 from . import preprocess
-from .stratification import stratify_by_clinical
+from . import outputs
+
+from autumn.tool_kit.utils import (
+    find_rates_and_complements_from_ifr,
+    repeat_list_elements,
+    repeat_list_elements_average_last_two,
+    element_wise_list_division,
+)
+from autumn.constants import Compartment
+from autumn.summer_related.parameter_adjustments import (
+    adjust_upstream_stratified_parameter,
+    split_prop_into_two_subprops,
+)
+
 
 # Database locations
 INPUT_DB_PATH = os.path.join(constants.DATA_PATH, "inputs.db")
@@ -21,19 +35,19 @@ AGEGROUP_MAX = 80  # years
 AGEGROUP_STEP = 5  # years
 
 
-# class Clinical:
-#     NON_SYMPT = "non_sympt"
-#     SYMPT_NON_HOSPITAL = "sympt_non_hospital"
-#     SYMPT_ISOLATE = "sympt_isolate"
-#     HOSPITAL_NON_ICU = "hospital_non_icu"
-#     ICU = "icu"
-#     ALL = [
-#         NON_SYMPT,
-#         SYMPT_NON_HOSPITAL,
-#         SYMPT_ISOLATE,
-#         HOSPITAL_NON_ICU,
-#         ICU,
-#     ]
+class Clinical:
+    NON_SYMPT = "non_sympt"
+    SYMPT_NON_HOSPITAL = "sympt_non_hospital"
+    SYMPT_ISOLATE = "sympt_isolate"
+    HOSPITAL_NON_ICU = "hospital_non_icu"
+    ICU = "icu"
+    ALL = [
+        NON_SYMPT,
+        SYMPT_NON_HOSPITAL,
+        SYMPT_ISOLATE,
+        HOSPITAL_NON_ICU,
+        ICU,
+    ]
 
 
 validate_params = sb.build_validator(
@@ -46,11 +60,14 @@ validate_params = sb.build_validator(
     compartment_periods=sb.DictGeneric(str, float),
     compartment_periods_calculated=dict,
     # Age stratified params
-    symptomatic_props=sb.List(float),
     hospital_props=sb.List(float),
     hospital_inflate=bool,
-    icu_prop=float,
     infection_fatality_props=sb.List(float),
+    # Clinical status stratified params
+    symptomatic_props=sb.List(float),
+    icu_prop=float,
+    icu_mortality_prop=float,
+    prop_isolated_among_symptomatic=float,
     # Youth reduced susceiptibility adjustment.
     young_reduced_susceptibility=float,
     reduced_susceptibility_agegroups=sb.List(float),
@@ -67,11 +84,9 @@ validate_params = sb.build_validator(
     ),
     # Other stuff
     contact_rate=float,
-    icu_mortality_prop=float,
     non_sympt_infect_multiplier=float,
     hospital_non_icu_infect_multiplier=float,
     icu_infect_multiplier=float,
-    prop_isolated_among_symptomatic=float,
     infectious_seed=int,
     # Death rates.
     infect_death=float,
@@ -86,7 +101,7 @@ def build_model(params: dict) -> StratifiedModel:
     """
     # Update parameters stored in dictionaries that need to be modified during calibration
     # FIXME: This needs to be generic, goes outside of build_model.
-    params = update_dict_params_for_calibration(params)
+    # params = update_dict_params_for_calibration(params)
 
     validate_params(params)
 
@@ -94,10 +109,10 @@ def build_model(params: dict) -> StratifiedModel:
     # FIXME: unit tests for build_static
     # FIXME: unit tests for build_dynamic
     country = params["country"]
-    dynamic_mixing_params = params["mixing"]
     npi_effectiveness_params = params["npi_effectiveness"]
     static_mixing_matrix = preprocess.mixing_matrix.build_static(country, None)
     dynamic_mixing_matrix = None
+    dynamic_mixing_params = params["mixing"]
     if dynamic_mixing_params:
         dynamic_mixing_matrix = preprocess.mixing_matrix.build_dynamic(
             country, dynamic_mixing_params, npi_effectiveness_params
@@ -215,6 +230,8 @@ def build_model(params: dict) -> StratifiedModel:
         )
 
     # Stratify model by age.
+    # Coerce age breakpoint numbers into strings - all strata are represented as strings.
+    agegroup_strata = [str(s) for s in agegroup_strata]
     # Create parameter adjustment request for age stratifications
     youth_agegroups = params["reduced_susceptibility_agegroups"]
     youth_reduced_susceptibility = params["young_reduced_susceptibility"]
@@ -249,158 +266,194 @@ def build_model(params: dict) -> StratifiedModel:
     )
 
     # Stratify infectious compartment by clinical status
-    # TODO: FIX THIS
-    model, model_parameters = stratify_by_clinical(model, model_parameters, compartments)
 
-    # Define output connections to collate
-    output_connections = {
-        # Track flow from presymptomatic cases to infectious cases.
-        "incidence": {
-            "origin": Compartment.PRESYMPTOMATIC,
-            "to": Compartment.EARLY_INFECTIOUS,
-            "origin_condition": "",
-            "to_condition": "",
-        }
+    """
+    Stratify the infectious compartments of the covid model (not including the pre-symptomatic compartments, which are
+    actually infectious)
+    """
+
+    # Define stratification
+    import pdb
+    from pprint import pprint
+
+    strata_to_implement = Clinical.ALL
+    compartments_to_split = [Compartment.EARLY_INFECTIOUS, Compartment.LATE_INFECTIOUS]
+    #  Get the raw proportions of persons dying and progressing to symptomatic,
+    # hospital if symptomatic, and to ICU if hospitalised
+    #  adjusting to required number of age groups.
+    # FIXME: WHY DO WE DO THIS?!?!?!?!??!?!?!?!?!??!
+    infection_fatality_props = params["infection_fatality_props"]
+    symptomatic_props = params["symptomatic_props"]
+    hospital_props = params["hospital_props"]
+    icu_prop = params["icu_prop"]
+    adjusted_infection_fatality_props = repeat_list_elements_average_last_two(
+        infection_fatality_props
+    )
+    raw_sympt = repeat_list_elements(2, symptomatic_props)
+    raw_hospital = repeat_list_elements_average_last_two(hospital_props)
+
+    # Find the absolute progression proportions from the requested splits
+    abs_props = split_prop_into_two_subprops([1.0] * 16, "", raw_sympt, "sympt")
+    abs_props.update(
+        split_prop_into_two_subprops(abs_props["sympt"], "sympt", raw_hospital, "hospital")
+    )
+    abs_props.update(
+        split_prop_into_two_subprops(abs_props["hospital"], "hospital", [icu_prop] * 16, "icu")
+    )
+
+    # Calculate the absolute proportion of all patients who should eventually reach hospital death or ICU death.
+    # Find IFR that needs to be contributed by ICU and non-ICU hospital deaths\
+    icu_mortality_prop = params["icu_mortality_prop"]
+    hospital_death, icu_death = [], []
+    for i_agegroup, agegroup in enumerate(agegroup_strata):
+
+        # If IFR for age group is greater than absolute proportion hospitalised, increased hospitalised proportion
+        if adjusted_infection_fatality_props[i_agegroup] > abs_props["hospital"][i_agegroup]:
+            abs_props["hospital"][i_agegroup] = adjusted_infection_fatality_props[i_agegroup]
+
+        # Find the target absolute ICU mortality and the amount left over from IFRs to go to hospital, if any
+        target_icu_abs_mort = abs_props["icu"][i_agegroup] * icu_mortality_prop
+        left_over_mort = adjusted_infection_fatality_props[i_agegroup] - target_icu_abs_mort
+
+        # If some IFR will be left over for the hospitalised
+        if left_over_mort > 0.0:
+            hospital_death.append(left_over_mort)
+            icu_death.append(target_icu_abs_mort)
+
+        # Otherwise if all IFR taken up by ICU
+        else:
+            hospital_death.append(0.0)
+            icu_death.append(adjusted_infection_fatality_props[i_agegroup])
+
+    abs_death_props = {"hospital_death": hospital_death, "icu_death": icu_death}
+
+    # Find the absolute proportion dying in hospital and in ICU
+    abs_props.update(abs_death_props)
+
+    # CFR for non-ICU hospitalised patients
+    rel_props = {
+        "hospital_death": element_wise_list_division(
+            abs_props["hospital_death"], abs_props["hospital_non_icu"]
+        ),
+        "icu_death": element_wise_list_division(abs_props["icu_death"], abs_props["icu"]),
     }
 
-    import itertools
-    from datetime import date
-    from summer.model.utils.string import find_name_components
+    # Progression rates into the infectious compartment(s)
+    fixed_prop_strata = ["non_sympt", "hospital_non_icu", "icu"]
+    stratification_adjustments = adjust_upstream_stratified_parameter(
+        "within_presymptomatic",
+        fixed_prop_strata,
+        "agegroup",
+        agegroup_strata,
+        [abs_props[stratum] for stratum in fixed_prop_strata],
+    )
 
-    import pdb
+    # Set isolation rates as absolute proportions
+    # Set the absolute proportions of new cases isolated and not isolated, and indicate to the model where they should be found.
+    # Apply the isolated proportion to the symptomatic non-hospitalised group
+    prop_isolated_among_symptomatic = params["prop_isolated_among_symptomatic"]
+    for i_age, agegroup in enumerate(agegroup_strata):
+        prop_isolated = (
+            abs_props["sympt"][i_age] * prop_isolated_among_symptomatic
+            - abs_props["hospital"][i_age]
+        ) / abs_props["sympt_non_hospital"][i_age]
+        stratification_adjustments["within_presymptomaticXagegroup_" + agegroup][
+            "sympt_isolate"
+        ] = (abs_props["sympt_non_hospital"][i_age] * prop_isolated)
+        stratification_adjustments["within_presymptomaticXagegroup_" + agegroup][
+            "sympt_non_hospital"
+        ] = abs_props["sympt_non_hospital"][i_age] * (1.0 - prop_isolated)
 
+    # Calculate death rates and progression rates for hospitalised and ICU patients
+    progression_death_rates = {}
+    for stratum in ("hospital", "icu"):
+        death_rates, complements = find_rates_and_complements_from_ifr(
+            rel_props[stratum + "_death"],
+            1,
+            [model_parameters["within_" + stratum + "_late"]] * 16,
+        )
+        progression_death_rates[stratum + "_infect_death"] = death_rates
+        progression_death_rates[stratum + "_within_late"] = complements
+
+    # Death and non-death progression between infectious compartments towards the recovered compartment
+    for param in ("within_late", "infect_death"):
+        stratification_adjustments.update(
+            adjust_upstream_stratified_parameter(
+                param,
+                strata_to_implement[3:],
+                "agegroup",
+                model_parameters["all_stratifications"]["agegroup"],
+                [
+                    progression_death_rates["hospital_" + param],
+                    progression_death_rates["icu_" + param],
+                ],
+                overwrite=True,
+            )
+        )
+
+    # Over-write rate of progression for early compartments for hospital and ICU
+    stratification_adjustments.update(
+        {
+            "within_infectious": {
+                "hospital_non_icuW": model_parameters["within_hospital_early"],
+                "icuW": model_parameters["within_icu_early"],
+            },
+        }
+    )
     pdb.set_trace()
 
-    def create_fully_stratified_incidence_covid(
-        requested_stratifications, strata_dict, model_params
-    ):
-        """
-        Create derived outputs for fully disaggregated incidence
-        """
-
-        all_tags_by_stratification = []
-        for stratification in requested_stratifications:
-            this_stratification_tags = []
-            for stratum in strata_dict[stratification]:
-                this_stratification_tags.append(stratification + "_" + stratum)
-            all_tags_by_stratification.append(this_stratification_tags)
-
-        all_tag_lists = list(itertools.product(*all_tags_by_stratification))
-
-        for tag_list in all_tag_lists:
-            stratum_name = "X".join(tag_list)
-            out_connections["incidenceX" + stratum_name] = {
-                "origin": Compartment.PRESYMPTOMATIC,
-                "to": Compartment.EARLY_INFECTIOUS,
-                "origin_condition": "",
-                "to_condition": stratum_name,
-            }
-
-        return out_connections
-
-    # Add fully stratified incidence to output_connections
-    output_connections.update(
-        create_fully_stratified_incidence_covid(
-            model_parameters["stratify_by"],
-            model_parameters["all_stratifications"],
-            model_parameters,
-        )
+    # Sort out all infectiousness adjustments for entire model here
+    model, stratification_adjustments, strata_infectiousness = adjust_infectiousness(
+        model, model_parameters, strata_to_implement, stratification_adjustments
     )
 
-    def create_fully_stratified_progress_covid(
-        requested_stratifications, strata_dict, model_params
-    ):
-        """
-        Create derived outputs for fully disaggregated incidence
-        """
-        out_connections = {}
-        origin_compartment = (
-            Compartment.EARLY_INFECTIOUS
-            if model_params["n_compartment_repeats"][Compartment.EARLY_INFECTIOUS] < 2
-            else Compartment.EARLY_INFECTIOUS
-            + "_"
-            + str(model_params["n_compartment_repeats"][Compartment.EARLY_INFECTIOUS])
-        )
-        to_compartment = (
-            Compartment.LATE_INFECTIOUS
-            if model_params["n_compartment_repeats"][Compartment.LATE_INFECTIOUS] < 2
-            else Compartment.LATE_INFECTIOUS + "_1"
-        )
-
-        all_tags_by_stratification = []
-        for stratification in requested_stratifications:
-            this_stratification_tags = []
-            for stratum in strata_dict[stratification]:
-                this_stratification_tags.append(stratification + "_" + stratum)
-            all_tags_by_stratification.append(this_stratification_tags)
-
-        all_tag_lists = list(itertools.product(*all_tags_by_stratification))
-
-        for tag_list in all_tag_lists:
-            stratum_name = "X".join(tag_list)
-            out_connections["progressX" + stratum_name] = {
-                "origin": origin_compartment,
-                "to": to_compartment,
-                "origin_condition": "",
-                "to_condition": stratum_name,
-            }
-
-        return out_connections
-
-    output_connections.update(
-        create_fully_stratified_progress_covid(
-            model_parameters["stratify_by"],
-            model_parameters["all_stratifications"],
-            model_parameters,
-        )
+    # Stratify the model using the SUMMER stratification function
+    model.stratify(
+        "clinical",
+        strata_to_implement,
+        compartments_to_split,
+        infectiousness_adjustments=strata_infectiousness,
+        requested_proportions={
+            stratum: 1.0 / len(strata_to_implement) for stratum in strata_to_implement
+        },
+        adjustment_requests=stratification_adjustments,
+        verbose=False,
     )
-    model.output_connections = output_connections
 
-    def calculate_notifications_covid(model, time):
-        """
-        Returns the number of notifications for a given time.
-        The fully stratified incidence outputs must be available before calling this function
-        """
-        notifications = 0.0
-        this_time_index = model.times.index(time)
-        for key, value in model.derived_outputs.items():
-            if "progressX" in key and any(
-                [stratum in key for stratum in model.all_stratifications["clinical"][2:]]
-            ):
-                notifications += value[this_time_index]
-        return notifications
-
-    def calculate_incidence_icu_covid(model, time):
-        this_time_index = model.times.index(time)
-        incidence_icu = 0.0
-        for key, value in model.derived_outputs.items():
-            if "incidence" in find_name_components(key) and "clinical_icu" in find_name_components(
-                key
-            ):
-                incidence_icu += value[this_time_index]
-        return incidence_icu
-
-    def find_date_from_year_start(times, incidence):
-        """
-        Messy patch to shift dates over such that zero represents the start of the year and the number of cases are
-        approximately correct for Australia at 22nd March
-        """
-        year, month, day = 2020, 3, 22
-        cases = 1098.0
-        data_days_from_year_start = (date(year, month, day) - date(year, 1, 1)).days
-        model_days_reach_target = next(
-            i_inc[0] for i_inc in enumerate(incidence) if i_inc[1] > cases
-        )
-        print(f"Integer date at which target reached is: {model_days_reach_target}")
-        days_to_add = data_days_from_year_start - model_days_reach_target
-        return [int(i_time) + days_to_add for i_time in times]
+    # Track compartment output connections.
+    stratum_names = list(set(["X".join(x.split("X")[1:]) for x in model.compartment_names]))
+    incidence_connections = outputs.get_incidence_connections(stratum_names)
+    progress_connections = outputs.get_progress_connections(stratum_names)
+    model.output_connections = {
+        **incidence_connections,
+        **progress_connections,
+    }
 
     # Add notifications to derived_outputs
-    model.derived_output_functions["notifications"] = calculate_notifications_covid
-    model.death_output_categories = list_all_strata_for_mortality(model.compartment_names)
-    model.derived_output_functions["incidence_icu"] = calculate_incidence_icu_covid
+    # FIXME: Fix clinical stratifications first
+    # model.derived_output_functions["notifications"] = calculate_notifications_covid
+    # model.death_output_categories = list_all_strata_for_mortality(model.compartment_names)
+    # model.derived_output_functions["incidence_icu"] = calculate_incidence_icu_covid
 
     return model
+
+
+def adjust_infectiousness(model, params, strata, adjustments):
+    """
+    Sort out all infectiousness adjustments for all compartments of the model.
+    """
+
+    # Make adjustment for hospitalisation and ICU admission
+    strata_infectiousness = {}
+    for stratum in strata:
+        if stratum + "_infect_multiplier" in params:
+            strata_infectiousness[stratum] = params[stratum + "_infect_multiplier"]
+
+    # Make adjustment for isolation/quarantine
+    model.individual_infectiousness_adjustments = [
+        [[Compartment.LATE_INFECTIOUS, "clinical_sympt_isolate"], 0.2]
+    ]
+    return model, adjustments, strata_infectiousness
 
 
 def update_dict_params_for_calibration(params):
