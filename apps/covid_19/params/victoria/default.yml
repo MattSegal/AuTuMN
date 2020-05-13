@@ -1,6 +1,10 @@
 ---
 country: victoria
 iso3: VIC
+scenario_start_time: 130
+times:
+  start_time: 15.
+  end_time: 365.
 
 importation:
   active: True
@@ -10,9 +14,6 @@ importation:
   enforced_isolation_effect: .9858
 
 infectious_seed: 0
-
-start_time: 15.
-end_time: 365.
 
 contact_rate: 0.024
 non_sympt_infect_multiplier: .464939
@@ -104,5 +105,3 @@ mixing:
     values:
       - 1.
       - 0.
-
-scenario_start_time: 130

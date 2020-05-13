@@ -1,44 +1,16 @@
 import os
-from typing import Dict, List
 
 from autumn import constants
 from autumn.constants import Compartment
-from autumn.disease_categories.emerging_infections.flows import (
-    add_infection_flows,
-    add_transition_flows,
-    add_recovery_flows,
-    add_sequential_compartment_flows,
-    add_infection_death_flows,
-)
-from autumn.demography.social_mixing import (
-    load_specific_prem_sheet,
-    update_mixing_with_multipliers,
-    get_total_contact_rates_by_age,
-)
+from autumn.demography.social_mixing import get_total_contact_rates_by_age
 from summer.model import StratifiedModel
 from autumn.db import Database, find_population_by_agegroup
-from autumn.demography.ageing import add_agegroup_breaks
-from autumn.demography.population import get_population_size
-from autumn.summer_related.parameter_adjustments import split_multiple_parameters
 from autumn.tb_model import list_all_strata_for_mortality
-from autumn.tool_kit import schema_builder as sb
-from autumn.tool_kit.scenarios import get_model_times_from_inputs
-from autumn.tool_kit.utils import (
-    find_relative_date_from_string_or_tuple,
-    normalise_sequence,
-    convert_list_contents_to_int,
-)
+from autumn.tool_kit import get_model_times_from_inputs, schema_builder as sb
+from autumn.tool_kit.utils import normalise_sequence
 
 from . import preprocess
 from .stratification import stratify_by_clinical
-from .outputs import (
-    find_incidence_outputs,
-    create_fully_stratified_incidence_covid,
-    create_fully_stratified_progress_covid,
-    calculate_notifications_covid,
-    calculate_incidence_icu_covid,
-)
-from .importation import set_tv_importation_rate
 
 # Database locations
 INPUT_DB_PATH = os.path.join(constants.DATA_PATH, "inputs.db")
@@ -69,38 +41,38 @@ validate_params = sb.build_validator(
     country=str,
     iso3=str,
     # Running time.
-    times={"start_time": float, "end_time": float, "time_step": float,},
+    times=sb.Dict(start_time=float, end_time=float, time_step=float),
     # Compartment construction
-    compartment_periods=Dict[str, float],
+    compartment_periods=sb.DictGeneric(str, float),
     compartment_periods_calculated=dict,
     # Age stratified params
-    symptomatic_props=List[float],
-    hospital_props=List[float],
+    symptomatic_props=sb.List(float),
+    hospital_props=sb.List(float),
     hospital_inflate=bool,
     icu_prop=float,
-    infection_fatality_props=List[float],
+    infection_fatality_props=sb.List(float),
     # Youth reduced susceiptibility adjustment.
     young_reduced_susceptibility=float,
-    reduced_susceptibility_agegroups=List[str],  # Why a string?
+    reduced_susceptibility_agegroups=sb.List(float),
     # Mixing matrix
-    mixing=Dict[str, {"times": list, "values": List[float]}],  # date or float
-    npi_effectiveness=Dict[str, float],
+    mixing=sb.DictGeneric(str, sb.Dict(times=list, values=sb.List(float))),
+    npi_effectiveness=sb.DictGeneric(str, float),
     # Importation of disease from outside of region.
-    importation={
-        "active": bool,
-        "times": List[float],
-        "cases": List[float],
-        "self_isolation_effect": float,
-        "enforced_isolation_effect": float,
-    }
+    importation=sb.Dict(
+        active=bool,
+        times=sb.List(float),
+        cases=sb.List(float),
+        self_isolation_effect=float,
+        enforced_isolation_effect=float,
+    ),
     # Other stuff
     contact_rate=float,
+    icu_mortality_prop=float,
     non_sympt_infect_multiplier=float,
     hospital_non_icu_infect_multiplier=float,
     icu_infect_multiplier=float,
     prop_isolated_among_symptomatic=float,
     infectious_seed=int,
-    ifr_multipliers=List[float],  # FIXME: Not always used
     # Death rates.
     infect_death=float,
     universal_death_rate=float,
@@ -117,11 +89,11 @@ def build_model(params: dict) -> StratifiedModel:
     params = update_dict_params_for_calibration(params)
 
     validate_params(params)
-    country = params["country"]
 
     # Build mixing matrix.
     # FIXME: unit tests for build_static
     # FIXME: unit tests for build_dynamic
+    country = params["country"]
     dynamic_mixing_params = params["mixing"]
     npi_effectiveness_params = params["npi_effectiveness"]
     static_mixing_matrix = preprocess.mixing_matrix.build_static(country, None)
@@ -183,7 +155,7 @@ def build_model(params: dict) -> StratifiedModel:
     times = params["times"]
     start_time = times["start_time"]
     end_time = times["end_time"]
-    time_stemp = times["time_stemp"]
+    time_stemp = times["time_step"]
     integration_times = get_model_times_from_inputs(start_time, end_time, time_stemp)
 
     # Add flows compartments
@@ -200,6 +172,7 @@ def build_model(params: dict) -> StratifiedModel:
     starting_pop = sum(total_pops)
 
     model_params = {
+        "import_secondary_rate": "import_secondary_rate",  # This might be important for some reason.
         "infect_death": params["infect_death"],
         "contact_rate": params["contact_rate"],
         **time_within_compartment_params,
@@ -222,14 +195,24 @@ def build_model(params: dict) -> StratifiedModel:
 
     # Set time-variant importation rate
     if is_importation_active:
-        import_params = params["import"]
+        import_params = params["importation"]
         param_name = "import_secondary_rate"
         self_isolation_effect = import_params["self_isolation_effect"]
         enforced_isolation_effect = import_params["enforced_isolation_effect"]
         import_times = import_params["times"]
-        import_cases = import_params["cases"]            
-        model.parameters[param_name] = param_name
-        model.adaptation_functions[param_name] = preprocess.importation.get_importation_rate_func(country, import_times, import_cases, self_isolation_effect, enforced_isolation_effect, params["contact_rate"], starting_pop)
+        import_cases = import_params["cases"]
+        # FIXME: This is a little much
+        model.adaptation_functions[
+            "import_secondary_rate"
+        ] = preprocess.importation.get_importation_rate_func(
+            country,
+            import_times,
+            import_cases,
+            self_isolation_effect,
+            enforced_isolation_effect,
+            params["contact_rate"],
+            starting_pop,
+        )
 
     # Stratify model by age.
     # Create parameter adjustment request for age stratifications
@@ -242,31 +225,78 @@ def build_model(params: dict) -> StratifiedModel:
         "within_late": {s: 1 for s in agegroup_strata},
         # Adjust susceptibility for children
         "contact_rate": {
-            str(agegroup): youth_reduced_susceptibility
-            for agegroup in youth_agegroups
+            str(agegroup): youth_reduced_susceptibility for agegroup in youth_agegroups
         },
     }
     if is_importation_active:
-        adjust_requests["import_secondary_rate"] = get_total_contact_rates_by_age(static_mixing_matrix, direction="horizontal")
+        adjust_requests["import_secondary_rate"] = get_total_contact_rates_by_age(
+            static_mixing_matrix, direction="horizontal"
+        )
 
     # Distribute starting population over agegroups
-    entry_props = {agegroup: prop for agegroup, prop in zip(agegroup_strata, normalise_sequence(total_pops))}
+    requested_props = {
+        agegroup: prop for agegroup, prop in zip(agegroup_strata, normalise_sequence(total_pops))
+    }
 
     # We use "agegroup" instead of "age", to avoid triggering automatic demography features.
     model.stratify(
-        "agegroup",  
+        "agegroup",
         agegroup_strata,
         compartment_types_to_stratify=[],  # Apply to all compartments
-        entry_proportions=entry_props,  
+        requested_proportions=requested_props,
         mixing_matrix=static_mixing_matrix,
         adjustment_requests=adjust_requests,
     )
 
     # Stratify infectious compartment by clinical status
+    # TODO: FIX THIS
     model, model_parameters = stratify_by_clinical(model, model_parameters, compartments)
 
     # Define output connections to collate
-    output_connections = find_incidence_outputs(model_parameters)
+    output_connections = {
+        # Track flow from presymptomatic cases to infectious cases.
+        "incidence": {
+            "origin": Compartment.PRESYMPTOMATIC,
+            "to": Compartment.EARLY_INFECTIOUS,
+            "origin_condition": "",
+            "to_condition": "",
+        }
+    }
+
+    import itertools
+    from datetime import date
+    from summer.model.utils.string import find_name_components
+
+    import pdb
+
+    pdb.set_trace()
+
+    def create_fully_stratified_incidence_covid(
+        requested_stratifications, strata_dict, model_params
+    ):
+        """
+        Create derived outputs for fully disaggregated incidence
+        """
+
+        all_tags_by_stratification = []
+        for stratification in requested_stratifications:
+            this_stratification_tags = []
+            for stratum in strata_dict[stratification]:
+                this_stratification_tags.append(stratification + "_" + stratum)
+            all_tags_by_stratification.append(this_stratification_tags)
+
+        all_tag_lists = list(itertools.product(*all_tags_by_stratification))
+
+        for tag_list in all_tag_lists:
+            stratum_name = "X".join(tag_list)
+            out_connections["incidenceX" + stratum_name] = {
+                "origin": Compartment.PRESYMPTOMATIC,
+                "to": Compartment.EARLY_INFECTIOUS,
+                "origin_condition": "",
+                "to_condition": stratum_name,
+            }
+
+        return out_connections
 
     # Add fully stratified incidence to output_connections
     output_connections.update(
@@ -276,6 +306,47 @@ def build_model(params: dict) -> StratifiedModel:
             model_parameters,
         )
     )
+
+    def create_fully_stratified_progress_covid(
+        requested_stratifications, strata_dict, model_params
+    ):
+        """
+        Create derived outputs for fully disaggregated incidence
+        """
+        out_connections = {}
+        origin_compartment = (
+            Compartment.EARLY_INFECTIOUS
+            if model_params["n_compartment_repeats"][Compartment.EARLY_INFECTIOUS] < 2
+            else Compartment.EARLY_INFECTIOUS
+            + "_"
+            + str(model_params["n_compartment_repeats"][Compartment.EARLY_INFECTIOUS])
+        )
+        to_compartment = (
+            Compartment.LATE_INFECTIOUS
+            if model_params["n_compartment_repeats"][Compartment.LATE_INFECTIOUS] < 2
+            else Compartment.LATE_INFECTIOUS + "_1"
+        )
+
+        all_tags_by_stratification = []
+        for stratification in requested_stratifications:
+            this_stratification_tags = []
+            for stratum in strata_dict[stratification]:
+                this_stratification_tags.append(stratification + "_" + stratum)
+            all_tags_by_stratification.append(this_stratification_tags)
+
+        all_tag_lists = list(itertools.product(*all_tags_by_stratification))
+
+        for tag_list in all_tag_lists:
+            stratum_name = "X".join(tag_list)
+            out_connections["progressX" + stratum_name] = {
+                "origin": origin_compartment,
+                "to": to_compartment,
+                "origin_condition": "",
+                "to_condition": stratum_name,
+            }
+
+        return out_connections
+
     output_connections.update(
         create_fully_stratified_progress_covid(
             model_parameters["stratify_by"],
@@ -284,6 +355,45 @@ def build_model(params: dict) -> StratifiedModel:
         )
     )
     model.output_connections = output_connections
+
+    def calculate_notifications_covid(model, time):
+        """
+        Returns the number of notifications for a given time.
+        The fully stratified incidence outputs must be available before calling this function
+        """
+        notifications = 0.0
+        this_time_index = model.times.index(time)
+        for key, value in model.derived_outputs.items():
+            if "progressX" in key and any(
+                [stratum in key for stratum in model.all_stratifications["clinical"][2:]]
+            ):
+                notifications += value[this_time_index]
+        return notifications
+
+    def calculate_incidence_icu_covid(model, time):
+        this_time_index = model.times.index(time)
+        incidence_icu = 0.0
+        for key, value in model.derived_outputs.items():
+            if "incidence" in find_name_components(key) and "clinical_icu" in find_name_components(
+                key
+            ):
+                incidence_icu += value[this_time_index]
+        return incidence_icu
+
+    def find_date_from_year_start(times, incidence):
+        """
+        Messy patch to shift dates over such that zero represents the start of the year and the number of cases are
+        approximately correct for Australia at 22nd March
+        """
+        year, month, day = 2020, 3, 22
+        cases = 1098.0
+        data_days_from_year_start = (date(year, month, day) - date(year, 1, 1)).days
+        model_days_reach_target = next(
+            i_inc[0] for i_inc in enumerate(incidence) if i_inc[1] > cases
+        )
+        print(f"Integer date at which target reached is: {model_days_reach_target}")
+        days_to_add = data_days_from_year_start - model_days_reach_target
+        return [int(i_time) + days_to_add for i_time in times]
 
     # Add notifications to derived_outputs
     model.derived_output_functions["notifications"] = calculate_notifications_covid

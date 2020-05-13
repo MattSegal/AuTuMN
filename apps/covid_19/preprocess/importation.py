@@ -10,7 +10,7 @@ def get_importation_rate_func(
     enforced_isolation_effect: float,
     contact_rate: float,
     starting_population: float,
-) -> Callable[float, float]:
+) -> Callable[[float], float]:
     """
     Returns a time varying function of importation secondary infection rate.
     See also: flows.

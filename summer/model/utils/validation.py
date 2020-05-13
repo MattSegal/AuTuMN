@@ -104,12 +104,12 @@ def check_flows(model):
     def _check(field, value, error):
         # Validate flows
         for flow in value:
+            param_name = flow["parameter"]
             is_missing_params = (
-                flow["parameter"] not in model.parameters
-                and flow["parameter"] not in model.time_variants
+                param_name not in model.parameters and param_name not in model.time_variants
             )
             if is_missing_params:
-                error(field, "Flow parameter not found in parameter list")
+                error(field, f"Flow parameter '{param_name}' not found in parameter list")
             if flow["origin"] not in model.compartment_types:
                 error(field, "From compartment name not found in compartment types")
             if "to" in flow and flow["to"] not in model.compartment_types:

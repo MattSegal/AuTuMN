@@ -4,6 +4,12 @@
 # When to introduce the scenario interventions taking off from the baseline
 scenario_start_time: 85
 
+# Country to extract Prem mixing matrix from
+country: null
+
+# Country to extract stratified population data from - should eventually use only one of country or iso3
+iso3: null
+
 # Running time-related - for COVID-19 model, all times are assumed to be in days and reference time is 1st Jan 2020
 times:
   start_time: 40.
@@ -97,12 +103,6 @@ icu_infect_multiplier: 0.2
 
 # proportion of isolated cases among symptomatic
 prop_isolated_among_symptomatic: 0.6
-
-# Country to extract Prem mixing matrix from
-country: null
-
-# Country to extract stratified population data from - should eventually use only one of country or iso3
-iso3: null
 
 # Initial conditions
 infectious_seed: 10

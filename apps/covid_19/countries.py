@@ -4,9 +4,9 @@ Build the COVID country model runner functions
 import os
 import yaml
 
+from autumn.tool_kit import load_params
 from autumn.model_runner import build_model_runner
 
-from .params import load_covid_params
 from .model import build_model
 
 
@@ -51,7 +51,7 @@ class CountryModel:
 
     @property
     def params(self):
-        return load_covid_params(self.country)
+        return load_params("covid_19", self.country)
 
     def run_model(self, run_name="model-run", run_desc=""):
         self._run_model(run_name, run_desc)

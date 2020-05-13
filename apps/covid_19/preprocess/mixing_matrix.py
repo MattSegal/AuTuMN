@@ -32,7 +32,7 @@ def build_static(country: str, multipliers: np.ndarray) -> np.ndarray:
 
 def build_dynamic(
     country: str, mixing_params: dict, npi_effectiveness_params: dict
-) -> Callable[float, dict]:
+) -> Callable[[float], dict]:
     """
     Build a time-varing mixing matrix
     """
@@ -43,7 +43,7 @@ def build_dynamic(
         mixing[location_key] = {
             "values": mixing_data["values"],
             "times": [
-                (t if type(t) is float else (t - BASE_DATE).days) for t in mixing_data["times"]
+                ((t - BASE_DATE).days if type(t) is date else t) for t in mixing_data["times"]
             ],
         }
 

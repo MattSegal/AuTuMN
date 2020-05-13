@@ -5,21 +5,27 @@ import os
 import yaml
 from os import path
 
+from autumn.constants import APPS_PATH
 from autumn.tool_kit.utils import merge_dicts
 
 
-def load_covid_params(app_name: str):
+def load_params(app_name: str, region_name: str):
     """
-    Load COVID parameters for the requested.
+    Load  parameters for the requested app and region.
     This is for loading only, please do not put any pre-processing in here.
 
     The data structure returned by this function is a little wonky for
     backwards compatibility reasons.
     """
-    param_path = path.basename(path.abspath(__file__))
-    param_dirnames = [d for d in os.listdir(param_path) if path.isdir(path.join(param_path, d))]
-    assert app_name in param_dirnames, f"App name {app_name} is not in {param_dirnames}"
-    app_param_dir = path.join(param_path, app_name)
+    param_path = path.join(APPS_PATH, app_name, "params")
+    assert path.exists(param_path), f"App name {app_name} not found at {param_path}"
+    param_dirnames = [
+        d
+        for d in os.listdir(param_path)
+        if path.isdir(path.join(param_path, d)) and not d == "__pycache__"
+    ]
+    assert region_name in param_dirnames, f"Region name {region_name} is not in {param_dirnames}"
+    app_param_dir = path.join(param_path, region_name)
 
     # Load base param config
     base_yaml_path = path.join(param_path, "base.yml")
