@@ -14,10 +14,8 @@ def calculate_notifications_covid(model: StratifiedModel, time: float):
     time_idx = model.times.index(time)
     for key, value in model.derived_outputs.items():
         is_progress = "progressX" in key
-        import pdb
-
-        pdb.set_trace()
-        is_xxx = any([stratum in key for stratum in model.all_stratifications["clinical"][2:]])
+        # FIXME: Validate with Romain or James that this is correct
+        is_xxx = any([stratum in key for stratum in ["sympt_isolate", "hospital_non_icu", "icu"]])
         if is_progress and is_xxx:
             notifications_count += value[time_idx]
 
@@ -31,20 +29,6 @@ def calculate_incidence_icu_covid(model, time):
         if "incidence" in find_name_components(key) and "clinical_icu" in find_name_components(key):
             incidence_icu += value[time_idx]
     return incidence_icu
-
-
-def find_date_from_year_start(times, incidence):
-    """
-    Messy patch to shift dates over such that zero represents the start of the year and the number of cases are
-    approximately correct for Australia at 22nd March
-    """
-    year, month, day = 2020, 3, 22
-    cases = 1098.0
-    data_days_from_year_start = (date(year, month, day) - date(year, 1, 1)).days
-    model_days_reach_target = next(i_inc[0] for i_inc in enumerate(incidence) if i_inc[1] > cases)
-    print(f"Integer date at which target reached is: {model_days_reach_target}")
-    days_to_add = data_days_from_year_start - model_days_reach_target
-    return [int(i_time) + days_to_add for i_time in times]
 
 
 def get_progress_connections(stratum_names: str):

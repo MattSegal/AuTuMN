@@ -1414,7 +1414,9 @@ class StratifiedModel(EpiModel):
                 raise ValueError(
                     "parameter component %s not found in parameters attribute" % component
                 )
-            elif isinstance(self.parameters[component], float):
+            elif isinstance(self.parameters[component], float) or isinstance(
+                self.parameters[component], int
+            ):
                 self.adaptation_functions[component] = create_multiplicative_function(
                     self.parameters[component]
                 )

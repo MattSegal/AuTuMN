@@ -370,7 +370,7 @@ def build_model(params: dict) -> StratifiedModel:
         death_rates, complements = find_rates_and_complements_from_ifr(
             rel_props[stratum + "_death"],
             1,
-            [model_parameters["within_" + stratum + "_late"]] * 16,
+            [time_within_compartment_params["within_" + stratum + "_late"]] * 16,
         )
         progression_death_rates[stratum + "_infect_death"] = death_rates
         progression_death_rates[stratum + "_within_late"] = complements
@@ -382,7 +382,7 @@ def build_model(params: dict) -> StratifiedModel:
                 param,
                 strata_to_implement[3:],
                 "agegroup",
-                model_parameters["all_stratifications"]["agegroup"],
+                agegroup_strata,
                 [
                     progression_death_rates["hospital_" + param],
                     progression_death_rates["icu_" + param],
@@ -395,17 +395,24 @@ def build_model(params: dict) -> StratifiedModel:
     stratification_adjustments.update(
         {
             "within_infectious": {
-                "hospital_non_icuW": model_parameters["within_hospital_early"],
-                "icuW": model_parameters["within_icu_early"],
+                "hospital_non_icuW": time_within_compartment_params["within_hospital_early"],
+                "icuW": time_within_compartment_params["within_icu_early"],
             },
         }
     )
-    pdb.set_trace()
 
     # Sort out all infectiousness adjustments for entire model here
-    model, stratification_adjustments, strata_infectiousness = adjust_infectiousness(
-        model, model_parameters, strata_to_implement, stratification_adjustments
-    )
+    # Make adjustment for hospitalisation and ICU admission
+    strata_infectiousness = {}
+    for stratum in strata_to_implement:
+        # FIXME: We shouldn't do global param lookup like this
+        if stratum + "_infect_multiplier" in params:
+            strata_infectiousness[stratum] = params[stratum + "_infect_multiplier"]
+
+    # Make adjustment for isolation/quarantine
+    model.individual_infectiousness_adjustments = [
+        [[Compartment.LATE_INFECTIOUS, "clinical_sympt_isolate"], 0.2]
+    ]
 
     # Stratify the model using the SUMMER stratification function
     model.stratify(
@@ -417,7 +424,6 @@ def build_model(params: dict) -> StratifiedModel:
             stratum: 1.0 / len(strata_to_implement) for stratum in strata_to_implement
         },
         adjustment_requests=stratification_adjustments,
-        verbose=False,
     )
 
     # Track compartment output connections.
@@ -430,30 +436,11 @@ def build_model(params: dict) -> StratifiedModel:
     }
 
     # Add notifications to derived_outputs
-    # FIXME: Fix clinical stratifications first
-    # model.derived_output_functions["notifications"] = calculate_notifications_covid
-    # model.death_output_categories = list_all_strata_for_mortality(model.compartment_names)
-    # model.derived_output_functions["incidence_icu"] = calculate_incidence_icu_covid
+    model.derived_output_functions["notifications"] = outputs.calculate_notifications_covid
+    model.derived_output_functions["incidence_icu"] = outputs.calculate_incidence_icu_covid
+    model.death_output_categories = list_all_strata_for_mortality(model.compartment_names)
 
     return model
-
-
-def adjust_infectiousness(model, params, strata, adjustments):
-    """
-    Sort out all infectiousness adjustments for all compartments of the model.
-    """
-
-    # Make adjustment for hospitalisation and ICU admission
-    strata_infectiousness = {}
-    for stratum in strata:
-        if stratum + "_infect_multiplier" in params:
-            strata_infectiousness[stratum] = params[stratum + "_infect_multiplier"]
-
-    # Make adjustment for isolation/quarantine
-    model.individual_infectiousness_adjustments = [
-        [[Compartment.LATE_INFECTIOUS, "clinical_sympt_isolate"], 0.2]
-    ]
-    return model, adjustments, strata_infectiousness
 
 
 def update_dict_params_for_calibration(params):
